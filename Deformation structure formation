@@ -1,0 +1,402 @@
+
+//2017.12.12 automatic cascade MD code for generating a deformed structure of Tungusten
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+
+#define NA  6750 //8064	//1536 // 192000//12288	//
+
+#define N_DIR 25	//100	// sampling number over the displacement direction)
+#define N_TIMING 4	//5	// sampling number over the timing
+#define D_TIMING 50	//50	// difference in neighboring timings
+#define N0_TIMING 0
+#define TEMP 30 // tempreture
+
+#define RUN_FOLDER "/home2/mosab/2017.01.04_V_MO/2017_12_12_W_STRAIN_damage_evolution/hydro/15x15x15/generate_deformed_structures"
+
+#define PKA_DIRECTION_FOLDER "/home/mosab/resources/stressed_dir_100/3rd_25_dir"
+
+#define LAMMPS_EXE "mpirun -np 6 /home/bin/lammps_mpi"			// lammps execution command
+#define INP_LAMMPS_REF       "/home2/mosab/resources/input.voronoi_ref_recenter1_dir209"	// reference input file (to be read and then be modified)
+#define INP_LAMMPS_REF_ST       "/home2/mosab/resources/Input_strained_structure_oscar_1fs_W_BN_hydrostatic"	// reference input file for strained_file making
+
+#define NLINE_INP_LAMMPS_REF 64						// the number of lines in the reference input file
+#define NLINE_INP_LAMMPS_REF_ST  138					// the number of lines in the strained reference input file
+#define s_rate 0.01
+
+#define RES_FILE1 "/home2/mosab/2017.01.04_V_MO/2017_12_12_W_STRAIN_damage_evolution/hydro/15x15x15/resources/restart.151515_W-30K.100000"//restart.181614_W-30K.100000"//restart.8812_W-30K.100000"//restart.181614_W-30K.100000"//restart.8812_W-30K.100000"//restart.181614_W-30K.100000"//restart.181614_W-30K.100000"//restart.8812_W-30K.100000" //restart.181614_W-30K.100000"	// restart file name
+#define RES_FILE2 "/home2/mosab/2017.01.04_V_MO/2017_12_12_W_STRAIN_damage_evolution/hydro/15x15x15/generate_deformed_structures/input_strain_restarts"     // restart file name
+#define POT_FILE1 "/home/mosab/resources/W_BN.eam.fs"////w_ema_new_pot"//W_BN.eam.fs"		// potential file name
+#define ATOM_SYMBOL1 "W"	// atomic symbol
+#define ATOM_MASS1 183.84	// atomic mass
+#define TMAX1 0.002//0.001		// dt/reset: maximum time step in ps
+#define XMAX1 0.01		// dt/reset: maximum displacement allowed for a step in A
+#define DT_FREQ1 10  		// dt/reset: the frequency of timestep redefinition
+#define NRUN1 500		// the number of run after the recoil initiation
+#define RES_FREQ1 1000		// the frequency of restart file generation
+#define THERMO_FREQ1 5		// the frequency of the thermo information pring
+#define DISCARD_NRUN1 0		// the number of run to change the timing of recoil event
+#define DISCARD_TSTEP1 TMAX1	// the timestep for the run to change the timing
+
+#define DUMP_INTERVAL 500
+
+#define CON_ELEMENTARY_CHARGE 1.60217662E-19
+#define CON_AVOGADRO 6.022140857E23
+#define RANDOM_SEED 10
+
+/////////////////
+#define PKAID1 512 //512 //
+/////////////////////////////////////////////
+#define PKA_ENE_MIN 20	// integer
+#define PKA_ENE_INC 1	// integer
+#define PKA_ENE_DEC 1  // integer
+//#define PKA_ENE_MAX 201 // integer
+/////////////////
+
+double func_calcuate_pka_velocity(double pka_mass, double pka_ene, double pka_vec[], double pka_vel[]);
+void func_write_execution_command(int direction,double ST);
+void func_create_strained_files(char fold1[], char proj1[], double ST, double pka_vel[], int pkaid, int discard_nrun);
+void func_create_input_files(char fold1[], char proj1[], double pka_ene, double pka_vel[], int pkaid, int discard_nrun,char fold2[]);
+void func_read_defect(char pathway[],int defect[]);
+
+
+int main(void)
+{
+	int i,j,n,s,t;
+	int ns;
+	double STRAIN_MAX=2.2; //strain rate upto 2%
+	double  STRAIN_INC=0.6;// strain rate upto 0.5%
+	double STRAIN_MIN=-2.0; // Min strain rate is -2%
+	double perc;
+	int discard_nrun;
+	int defect_n=0;
+	int defect0[2]={0};
+	char cline1[500];
+	char fold1[300];
+	char command1[300];
+	double pka_vx,pka_vy,pka_vz,pka_speed,ST;
+	double pka_mass,pka_ene;
+	double pka_vec[N_DIR][3],pka_vel[3];
+	double tde[(N_DIR+1)][(N_TIMING+1)]={0};
+	char fname_pkadir[300];
+	char proj1[300],fold2[300];
+	char fname1[300];
+	FILE *fr,*fw;
+	
+	srand(RANDOM_SEED);
+
+	sprintf(fname_pkadir,"%s/PKA-%.5d.dat",PKA_DIRECTION_FOLDER,N_DIR);
+	if( (fr=fopen(fname_pkadir,"r"))==NULL )	{  printf("error in pka-direction file: %s\n",fname_pkadir);  exit(1);  }
+        for(s=0;s<N_DIR;s++)
+        {
+                fscanf(fr,"%d",&ns);
+                if(s!=ns)       {  printf("error: mismatch in ns number\n");  exit(1);  }
+                for(i=0;i<3;i++)        fscanf(fr,"%lf",&pka_vec[s][i]);
+	}
+	fclose(fr);
+   	
+
+	for(ST=STRAIN_MIN;ST<=STRAIN_MAX;ST=ST+STRAIN_INC)
+	{
+				func_create_strained_files(RUN_FOLDER, proj1, ST, pka_vel, PKAID1, discard_nrun);
+				sprintf(command1,"date");
+				system(command1);
+	                        sprintf(command1,"%s <%s/input..%lf_percent > output.%lf\n",LAMMPS_EXE,RUN_FOLDER,ST,ST);
+                                system(command1);
+
+	}
+		
+        sprintf(command1,"mkdir input_strain_resources\n");
+        system(command1);
+        sprintf(command1,"mkdir input_strain_datas\n");
+        system(command1);
+        sprintf(command1,"mkdir input_strain_restarts\n");
+        system(command1);
+
+        sprintf(command1,"mv input..* input_strain_resources\n");
+	system(command1);
+        sprintf(command1,"mv data.strain* input_strain_datas\n");
+        system(command1);
+        sprintf(command1,"mv restart.strain* input_strain_restarts\n");
+        system(command1);
+
+for(ST=STRAIN_MIN;ST<=STRAIN_MAX;ST=ST+STRAIN_INC)
+	{
+	perc=ST*10;
+	//int PERCENTAGE=perc;
+	
+     sprintf(fold2,"%s/restart.strain_W_%g\n",RES_FILE2,perc);
+   	for(t=0;t<N_TIMING;t++)
+       	{
+         	discard_nrun=(N0_TIMING+t)*D_TIMING;
+              	printf("#Timing:\t%d\n",discard_nrun);
+		
+		for(s=0;s<N_DIR;s++)
+		{
+			printf("#DIR\t%.3d\n",s);
+			printf("#PKA-displacement-direction\t%lf\t%lf\t%lf\n",pka_vec[s][0],pka_vec[s][1],pka_vec[s][2]);
+
+			n=PKA_ENE_MIN;
+			while(defect_n==0) {
+				n+=PKA_ENE_INC;
+				pka_ene=n;
+				printf("#Energy: %lf\n",pka_ene);
+				pka_speed=func_calcuate_pka_velocity(ATOM_MASS1, pka_ene, pka_vec[s], pka_vel);
+
+				sprintf(proj1,"PKA_D%.4d_E%.3d_T%.4d_percent%lf",s,n,discard_nrun,ST);
+				func_create_input_files(RUN_FOLDER, proj1, pka_ene, pka_vel, PKAID1, discard_nrun,fold2);
+				sprintf(command1,"date");
+				system(command1);
+				sprintf(command1,"%s < input.%s > output.%s\n",LAMMPS_EXE,proj1,proj1);
+				system(command1);
+				sprintf(fname1,"%s/dump.voronoi_%s",RUN_FOLDER,proj1);
+				func_read_defect(fname1,defect0);
+				defect_n=defect0[0];
+
+				if(defect_n==0)
+				{
+					sprintf(command1,"rm *%s*",proj1);
+					system(command1);
+				}
+			}
+			while(defect_n!=0) {
+				n-=PKA_ENE_DEC;
+				pka_ene=n;
+				printf("#Energy: %lf\n",pka_ene);
+				pka_speed=func_calcuate_pka_velocity(ATOM_MASS1, pka_ene, pka_vec[s], pka_vel);
+				sprintf(proj1,"PKA_D%.4d_E%.3d_T%.4d_percent%lf",s,n,discard_nrun,ST);
+				func_create_input_files(RUN_FOLDER, proj1, pka_ene, pka_vel, PKAID1, discard_nrun,fold2);
+                                sprintf(command1,"date");
+                                system(command1);
+                                sprintf(command1,"%s < input.%s > output.%s\n",LAMMPS_EXE,proj1,proj1);
+                                system(command1);
+                                sprintf(fname1,"%s/dump.voronoi_%s",RUN_FOLDER,proj1);
+                                func_read_defect(fname1,defect0);
+                                defect_n=defect0[0];
+
+                                if(defect_n==0)
+                                {
+                                        sprintf(command1,"rm *%s*",proj1);
+                                        system(command1);
+                                }	
+			}
+
+			tde[s][t]=n+PKA_ENE_DEC;
+			tde[s][N_TIMING]+=tde[s][t];
+			func_write_execution_command(s,ST);
+		}
+	tde[s][N_TIMING]=0.0;////////////////////addedd	
+	tde[s][t]=0.0;////////////////////addedd
+
+	}
+	
+	for(s=0;s<N_DIR;s++) { tde[s][N_TIMING]=tde[s][N_TIMING]/N_TIMING; }
+	
+        sprintf(fname1,"tde.txt_%lf",ST);
+        if( (fw=fopen(fname1,"w"))==NULL )      {  printf("error: cannot tde.txt");  exit(1);  }
+        fprintf(fw,"DIRECTION");
+	for(t=0;t<(N_TIMING+1);t++) { fprintf(fw,"\tTDE_T%.4d",(t*D_TIMING));}
+	fprintf(fw,"\tTDE\n");
+        for(i=0;i<(N_DIR+1);i++)
+        {
+		if(i!=N_DIR) { fprintf(fw,"%.4d",i); }
+		else { fprintf(fw,"average"); }
+		for(t=0;t<(N_TIMING+1);t++)
+		{
+			if(i!=N_DIR)
+			{ 
+				fprintf(fw,"\t%lf",tde[i][t]);
+				tde[N_DIR][t]+=tde[i][t];
+			}
+			else { fprintf(fw,"\t%lf",(tde[i][t]/N_DIR)); }
+		}
+		fprintf(fw,"\n");
+        } 
+	double tde[100][100]={0};/////////////////////////////
+	//double tde[(N_DIR+1)][(N_TIMING+1)]={0};
+
+        for(i=0;i<=(N_DIR+1);i++) /////////
+	{
+	for(t=0;t<=(N_TIMING+1);t++){ tde[i][t]=0; }/////////
+	} /////////
+
+	fclose(fw);
+
+
+
+	}
+	return 0;
+
+}
+void func_create_strained_files(char fold1[], char proj1[], double ST, double pka_vel[], int pkaid, int discard_nrun)
+{
+	int i,j,k;
+	double latparam= 3.18107135; 
+	double RUNS=ST*1000;
+	char cline1[500],fname1[300];
+	FILE *fw,*fr;
+	RUNS=abs(RUNS);
+    	sprintf(fname1,"%s/input..%lf_percent",fold1,ST);
+      	if( (fw=fopen(fname1,"w"))==NULL )      {  printf("error in open %s file\n",fname1);  exit(1);  }
+      	fprintf(fw,"# strain percent:\t%lf percent \n",ST);
+
+   	if( (fr=fopen(INP_LAMMPS_REF_ST,"r"))==NULL )      {  printf("error in open INP_LAMMPS_REF file\n");  exit(1);  }
+
+      	for(i=0;i<NLINE_INP_LAMMPS_REF_ST;i++)
+      	{
+          	fgets(cline1,500,fr);
+              	if(i==1)        fprintf(fw,"variable tempo  string       %d\n",100);
+              	else if(i==2)   fprintf(fw,"variable res_file1 string    %s\n",RES_FILE1);
+              	else if(i==3)   fprintf(fw,"variable pot_file1 string    %s\n",POT_FILE1);
+              	else if(i==4)   fprintf(fw,"variable atom_symbol1 string %s\n",ATOM_SYMBOL1);
+              	else if(i==5)   fprintf(fw,"variable latparam equal      %lf\n",latparam);
+             	else if(i==6)  fprintf(fw,"variable stemperature  equal     %d\n",TEMP);
+
+             	else if(i==7)  {
+             		if(ST<0) {fprintf(fw,"variable epercentage equal     %lf\n",(-1*ST/100));}
+			else{ fprintf(fw,"variable epercentage equal     %lf\n",(ST/100));}
+				}
+
+             	else if(i==8)  fprintf(fw,"variable myseed equal 12345\n");
+             	else if(i==9)  fprintf(fw,"variable atomrate equal 2500\n");
+             	else if(i==10)  fprintf(fw,"variable time_step equal 0.002\n");
+             	else if(i==11)  fprintf(fw,"variable time_eq equal 10000\n");
+             	else if(i==12)  fprintf(fw,"variable tdamp equal \"v_time_step*100\"\n");
+             	else if(i==13)  fprintf(fw,"variable pdamp equal \"v_time_step*1000\" \n");
+             	else if(i==14)  {
+				if(ST<0) { fprintf(fw,"variable R equal  -0.002\n"); } //strain rate of deformation
+				else{ fprintf(fw,"variable R equal  0.002\n"); }
+             			}
+             	else if(i==15)  fprintf(fw,"variable time_run equal \"(v_epercentage/0.002)/v_time_step\" \n");
+
+
+             	else if(i==16)  {
+				if(ST<0) { fprintf(fw,"variable factor equal  -1\n"); } //strain rate of deformation
+				else{ fprintf(fw,"variable factor  equal  1\n"); }
+             			}
+
+
+
+		else    fprintf(fw,"%s",cline1);
+      	} 
+     	fclose(fr);
+     	fclose(fw);
+}
+
+
+void func_create_input_files(char fold1[], char proj1[], double pka_ene, double pka_vel[], int pkaid, int discard_nrun,char fold2[])
+{
+	int i,j,k;
+	char cline1[500],fname1[300];
+	FILE *fw,*fr;
+
+    	sprintf(fname1,"%s/input.%s",fold1,proj1);
+      	if( (fw=fopen(fname1,"w"))==NULL )      {  printf("error in open %s file\n",fname1);  exit(1);  }
+      	fprintf(fw,"# pka-energy[eV]:\t%lf\n",pka_ene);
+     	fprintf(fw,"# %lf\t%lf\t%lf\n",pka_vel[0],pka_vel[1],pka_vel[2]);
+
+   	if( (fr=fopen(INP_LAMMPS_REF,"r"))==NULL )      {  printf("error in open INP_LAMMPS_REF file\n");  exit(1);  }
+
+      	for(i=0;i<NLINE_INP_LAMMPS_REF;i++)
+      	{
+          	fgets(cline1,500,fr);
+              	if(i==1)        fprintf(fw,"variable proj1  string       %s\n",proj1);
+              	else if(i==2)   fprintf(fw,"variable pkaid1 equal        %d\n",pkaid);
+             	else if(i==3)   fprintf(fw,"variable pkavx1 equal        %lf\n",pka_vel[0]);
+              	else if(i==4)   fprintf(fw,"variable pkavy1 equal        %lf\n",pka_vel[1]);
+            	else if(i==5)   fprintf(fw,"variable pkavz1 equal        %lf\n",pka_vel[2]);
+              	else if(i==6)   fprintf(fw,"variable res_file2 string    %s\n",fold2);
+              	else if(i==7)   fprintf(fw,"variable pot_file1 string    %s\n",POT_FILE1);
+              	else if(i==8)   fprintf(fw,"variable atom_symbol1 string %s\n",ATOM_SYMBOL1);
+              	else if(i==9)   fprintf(fw,"variable atom_mass1   equal  %lf\n",ATOM_MASS1);
+             	else if(i==10)  fprintf(fw,"variable tmax1 equal         %lf\n",TMAX1);
+             	else if(i==11)  fprintf(fw,"variable xmax1 equal         %lf\n",XMAX1);
+           	else if(i==12)  fprintf(fw,"variable nrun1 equal         %d\n",NRUN1);
+             	else if(i==13)  fprintf(fw,"variable res_freq1 equal     %d\n",RES_FREQ1);
+             	else if(i==14)  fprintf(fw,"variable thermo_freq1 equal  %d\n",THERMO_FREQ1);
+             	else if(i==15)  fprintf(fw,"variable dt_freq1     equal  %d\n",DT_FREQ1);
+            	else if(i==16)  fprintf(fw,"variable discard_nrun1  equal %d\n",discard_nrun);
+             	else if(i==17)  fprintf(fw,"variable discard_tstep1 equal %lf\n",DISCARD_TSTEP1);
+             	else    fprintf(fw,"%s",cline1);
+      	} 
+     	fclose(fr);
+     	fclose(fw);
+}
+
+
+void func_write_execution_command(int direction,double ST)
+{
+	char command1[300];
+
+      	sprintf(command1,"mkdir result_strain_percent%lf\n",ST);
+	system(command1);
+
+      	sprintf(command1,"mkdir result_%.4d_%lf\n",direction,ST);
+	system(command1);
+	//sprintf(command1,"mv data.before_event result_%.4d\n",direction);
+
+	sprintf(command1,"mv data.before_event result_%.4d_%lf\n",direction,ST);
+	system(command1);
+	sprintf(command1,"mv dump.PKA* restart.PKA* stress.30K* log.* input.PKA* dump.voronoi* result_%.4d_%lf\n",direction,ST);
+	system(command1);
+}
+
+double func_calcuate_pka_velocity(double pka_mass, double pka_ene, double pka_vec[], double pka_vel[])
+{
+	int i;
+	double pka_speed;
+
+        pka_speed=sqrt((2.0*(pka_ene*CON_ELEMENTARY_CHARGE))/(0.001*pka_mass/CON_AVOGADRO));    // in [m/s]
+        pka_speed=pka_speed*(1.0E10*1.0E-12);   // in [A/ps]
+        for(i=0;i<3;i++)        pka_vel[i]=pka_speed*pka_vec[i]/sqrt(pow(pka_vec[0],2.0)+pow(pka_vec[1],2.0)+pow(pka_vec[2],2.0));
+
+	return pka_speed;
+}
+
+void func_read_defect(char pathway[],int defect[])
+{
+        int i,j;
+        char cline[500];
+        int na, atom_n, step;
+        int defect_n;
+	int n_line;
+        FILE *fr;
+
+        if(  (fr=fopen(pathway,"r"))==NULL )      {  printf("error\n");  exit(1);  }
+        i=0;
+        while( NULL != fgets(cline,300,fr) )
+        {
+                i++;
+        }
+	n_line=i;
+        fclose(fr);
+
+        if( (fr=fopen(pathway, "r"))==NULL )
+        {
+                printf("error in open data file: %s\n",pathway); exit(1);
+        }
+
+        for(i=0;i<(n_line-(NA+9));i++) fgets(cline,500,fr);
+                
+	defect_n=0;
+	fgets(cline,500,fr);
+	fscanf(fr,"%d",&step);
+	if(step!=((n_line/(NA+9)-1)*DUMP_INTERVAL)) { printf("error : nstep.\n"); exit(1); }
+	for(i=0;i<2;i++)        fgets(cline,500,fr);
+	fscanf(fr,"%d",&na);
+	if(na!=NA)      {  printf("error: na at.\n");  exit(1);  }
+	for(i=0;i<6;i++)        fgets(cline,500,fr);
+                
+	for(i=0;i<NA;i++)
+	{
+		fscanf(fr, "%d", &atom_n);
+		if(atom_n==0)   { defect_n++; }
+		fgets(cline,500,fr);
+	}
+                
+	defect[0]=defect_n;
+	if(defect[0]==0) { defect[1]=defect[0]; }
+
+        fclose(fr);
+}
